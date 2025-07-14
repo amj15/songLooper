@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
-const MAX_TAPS = 10;
+const REQUIRED_TAPS = 5;
 const TIME_SIGNATURES = ["4/4", "3/4", "6/8", "2/4"];
+const SEMICORCHEA = 1 / 16;
 
 export default function Step3TimeSignature({ next, songData, setSongData }) {
   const [selected, setSelected] = useState(songData.timeSignature || "4/4");
-  const [downbeats, setDownbeats] = useState(songData.downbeats || []);
+  const [validTaps, setValidTaps] = useState([]);
   const [listening, setListening] = useState(false);
-  const audioRef = useRef(null);
-  const [bars, setBars] = useState([]);
   const [duration, setDuration] = useState(songData.duration || 0);
+  const audioRef = useRef(null);
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     if (!songData.audioFile) return;
@@ -22,6 +23,7 @@ export default function Step3TimeSignature({ next, songData, setSongData }) {
     };
 
     if (listening) {
+      audio.currentTime = 0;
       audio.play();
     } else {
       audio.pause();
@@ -40,77 +42,95 @@ export default function Step3TimeSignature({ next, songData, setSongData }) {
       if (e.code === "Space") {
         e.preventDefault();
         const now = audioRef.current.currentTime * 1000;
-        setDownbeats((prev) => {
-          if (prev.length >= MAX_TAPS) return prev; // no más taps
-          const newDownbeats = [...prev, now];
-          if (newDownbeats.length >= MAX_TAPS) {
-            setListening(false);
+        const bpm = songData.tempo;
+        if (!bpm) {
+          setErrorMsg("Define el tempo en el paso anterior.");
+          return;
+        }
+
+        const beatsPerBar = parseInt(selected.split("/")[0]);
+        const beatDuration = 60000 / bpm;
+        const barDuration = beatDuration * beatsPerBar;
+        const tolerance = barDuration * SEMICORCHEA;
+
+        if (validTaps.length === 0) {
+          setValidTaps([now]);
+        } else {
+          const firstTap = validTaps[0];
+          const expectedNext = firstTap + validTaps.length * barDuration;
+          const diff = Math.abs(now - expectedNext);
+
+          if (diff <= tolerance) {
+            setValidTaps((prev) => [...prev, now]);
+          } else {
+            setValidTaps([]);
+            setErrorMsg("Desajuste detectado. Reiniciando las pulsaciones.");
           }
-          return newDownbeats;
-        });
+        }
+
+        if (validTaps.length + 1 >= REQUIRED_TAPS) {
+          setListening(false);
+        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [listening]);
+  }, [listening, validTaps, selected, songData.tempo]);
 
-  function calcularBars(downbeats, bpm, timeSignature, duration) {
-    if (downbeats.length === 0) return [];
-
-    const beatsPerBar = parseInt(timeSignature.split("/")[0], 10);
+  function calcularBars(refTime, bpm, timeSignature, duration) {
+    const beatsPerBar = parseInt(timeSignature.split("/")[0]);
     const beatDuration = 60000 / bpm;
     const barDuration = beatDuration * beatsPerBar;
-    const firstDownbeat = average(downbeats);
 
-    let bars = [];
-    let current = firstDownbeat;
+    const bars = [];
 
-    while (current < duration) {
-      bars.push(current);
-      current += barDuration;
+    // Hacia atrás
+    let t = refTime;
+    while (t > 0) {
+      t -= barDuration;
+      if (t > 0) bars.unshift(t);
     }
 
-    if (bars[0] > barDuration * 0.5) {
-      bars.unshift(bars[0] - barDuration);
+    // Referencia
+    bars.push(refTime);
+
+    // Hacia adelante
+    t = refTime + barDuration;
+    while (t < duration) {
+      bars.push(t);
+      t += barDuration;
     }
 
     return bars;
   }
 
-  function average(arr) {
-    if (arr.length === 0) return 0;
-    return arr.reduce((a, b) => a + b, 0) / arr.length;
-  }
-
   const onFinish = () => {
-    const bpm = songData.tempo;
-    if (!bpm) {
-      alert("Falta definir el tempo en el paso anterior");
+    if (!songData.tempo) {
+      alert("Falta definir el tempo.");
       return;
     }
 
-    if (downbeats.length < MAX_TAPS) {
-      alert(`Por favor, marca al menos ${MAX_TAPS} veces el inicio del compás.`);
+    if (validTaps.length < REQUIRED_TAPS) {
+      alert(`Marca al menos ${REQUIRED_TAPS} veces el 1 del compás.`);
       return;
     }
 
-    const barsCalc = calcularBars(downbeats, bpm, selected, duration);
-
-    setBars(barsCalc);
+    const referenceTap = validTaps[2];
+    const bars = calcularBars(referenceTap, songData.tempo, selected, duration);
 
     setSongData({
       ...songData,
       timeSignature: selected,
-      downbeats,
-      bars: barsCalc,
+      downbeats: validTaps,
+      bars,
       duration,
     });
+
     next();
   };
 
-  // Cálculo para animar el círculo (porcentaje de borde completo)
-  const circleProgress = (downbeats.length / MAX_TAPS) * 100;
+  const progress = (validTaps.length / REQUIRED_TAPS) * 100;
 
   return (
     <div>
@@ -136,21 +156,21 @@ export default function Step3TimeSignature({ next, songData, setSongData }) {
         <button
           className="bg-green-600 text-white px-4 py-2 rounded mb-4"
           onClick={() => {
-            setDownbeats([]);
-            setBars([]);
+            setValidTaps([]);
+            setErrorMsg("");
             setListening(true);
           }}
         >
-          Empezar a reproducir y marcar el "1" (barra espaciadora)
+          Reproducir y empezar a marcar
         </button>
       )}
 
       {listening && (
         <>
-          <p className="mb-4">
-            Pulsa la barra espaciadora cuando escuches el "1" de cada compás. Marca al menos {MAX_TAPS} veces.
+          <p className="mb-2">
+            Pulsa la barra espaciadora cuando escuches el primer golpe del compás. Marca 5 veces.
           </p>
-
+          {errorMsg && <p className="text-red-500 mb-2">{errorMsg}</p>}
           <div className="mx-auto mb-4 w-24 h-24 relative">
             <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
               <circle
@@ -172,14 +192,13 @@ export default function Step3TimeSignature({ next, songData, setSongData }) {
                 cy="18"
                 r="15.9155"
                 strokeDasharray="100"
-                strokeDashoffset={100 - circleProgress}
+                strokeDashoffset={100 - progress}
               />
             </svg>
             <div className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-green-700 select-none">
-              {downbeats.length}
+              {validTaps.length}
             </div>
           </div>
-
           <button
             className="bg-red-600 text-white px-4 py-2 rounded"
             onClick={() => setListening(false)}
@@ -189,7 +208,7 @@ export default function Step3TimeSignature({ next, songData, setSongData }) {
         </>
       )}
 
-      {downbeats.length >= MAX_TAPS && !listening && (
+      {!listening && validTaps.length >= REQUIRED_TAPS && (
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded"
           onClick={onFinish}

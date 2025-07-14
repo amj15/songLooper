@@ -16,6 +16,8 @@ export default function Step4Summary({ songData }) {
     setIsSaved(true);
   };
 
+  console.log("Resumen del proyecto:", songData);
+
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-bold">Resumen del proyecto</h2>

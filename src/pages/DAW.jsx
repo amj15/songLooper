@@ -1,18 +1,40 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import * as Tone from "tone";
 
 const STORAGE_KEY = "songLooperProjects";
 
+
+
 export default function DAW() {
   const { id } = useParams();
+  const metronomeSynth = useRef(
+    new Tone.NoiseSynth({
+      noise: {
+        type: "white",
+      },
+      envelope: {
+        attack: 0.001,
+        decay: 0.05,
+        sustain: 0,
+      },
+    }).toDestination()
+  );
   const [project, setProject] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef(null);
   const rafRef = useRef(null);
+  const metronomeLoopRef = useRef(null);
   const [audioFile, setAudioFile] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
   const [showPopup, setShowPopup] = useState(true);
+  const [currentSubdivision, setCurrentSubdivision] = useState(0);
+  const [loopStart, setLoopStart] = useState(null);
+  const [loopEnd, setLoopEnd] = useState(null);
+  const [loopActive, setLoopActive] = useState(false);
+
+  console.log(project);
 
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -32,23 +54,59 @@ export default function DAW() {
     }
   };
 
+  const handleBarClick = (index) => {
+    if (loopStart === null) {
+      setLoopStart(index);
+      setLoopEnd(index);
+    } else if (loopEnd === null) {
+      if (index >= loopStart) {
+        setLoopEnd(index);
+      } else {
+        // Reiniciar selección si clickamos antes del start
+        setLoopStart(index);
+        setLoopEnd(null);
+      }
+    } else {
+      // Ya hay bucle definido, resetear con nuevo inicio
+      setLoopStart(index);
+      setLoopEnd(null);
+    }
+  };
+
   const updateCursor = () => {
     if (!audioRef.current || !project?.bars) return;
-
-    const currentTime = audioRef.current.currentTime;
+  
+    const currentTime = audioRef.current.currentTime * 1000; // ms
     const bars = project.bars;
-
-    // Buscamos la barra actual según currentTime (en ms)
-    const index = bars.findIndex((barTimeMs, i) => {
+    const subdivisionsCount = Number(project.timeSignature.split("/")[0]);
+  
+    let barIndex = bars.findIndex((barTimeMs, i) => {
       const nextBarTimeMs = bars[i + 1] ?? Infinity;
-      return (
-        currentTime * 1000 >= barTimeMs &&
-        currentTime * 1000 < nextBarTimeMs
-      );
+      return currentTime >= barTimeMs && currentTime < nextBarTimeMs;
     });
-
-    if (index !== -1) setCurrentIndex(index);
-
+  
+    if (barIndex === -1) barIndex = 0;
+  
+    if (loopActive && loopStart !== null && loopEnd !== null) {
+      // Si superamos el final del loop, volvemos al inicio
+      const loopEndTime = bars[loopEnd + 1] ?? bars[loopEnd] + 4000;
+      if (currentTime >= loopEndTime) {
+        audioRef.current.currentTime = bars[loopStart] / 1000; // en segundos
+        barIndex = loopStart;
+      }
+    }
+  
+    setCurrentIndex(barIndex);
+  
+    // Calcular subdivisión dentro de la barra
+    const barStart = bars[barIndex];
+    const barEnd = bars[barIndex + 1] ?? barStart + 4000;
+    const barDuration = barEnd - barStart;
+    const subdivisionDuration = barDuration / subdivisionsCount;
+  
+    const subdivisionIndex = Math.floor((currentTime - barStart) / subdivisionDuration);
+    setCurrentSubdivision(subdivisionIndex);
+  
     if (audioRef.current.paused || audioRef.current.ended) {
       setIsPlaying(false);
       cancelAnimationFrame(rafRef.current);
@@ -57,30 +115,67 @@ export default function DAW() {
     }
   };
 
-  const play = () => {
+  const playClick = (isDownbeat = false) => {
+    const synth = metronomeSynth.current;
+    if (!synth) return;
+  
+    const volume = isDownbeat ? -5 : -10; // volumen más fuerte para el beat 1
+    synth.volume.value = volume;
+    synth.triggerAttackRelease("8n");
+  };
+
+  const startMetronome = () => {
+    const bpm = Number(project.tempo);
+    const beatsPerBar = Number(project.timeSignature.split("/")[0]);
+  
+    Tone.Transport.bpm.value = bpm;
+  
+    let beatCount = 0;
+  
+    metronomeLoopRef.current = Tone.Transport.scheduleRepeat((time) => {
+      const isDownbeat = beatCount % beatsPerBar === 0;
+      playClick(isDownbeat);
+      beatCount++;
+    }, "4n"); // Cuatro negras por compás → "4n" es negra
+  
+    Tone.Transport.start();
+  };
+  
+  const stopMetronome = () => {
+    if (metronomeLoopRef.current) {
+      Tone.Transport.clear(metronomeLoopRef.current);
+      metronomeLoopRef.current = null;
+    }
+    Tone.Transport.stop();
+  };
+
+  const play = async () => {
     if (!audioRef.current) return;
+  
+    await Tone.start(); // Necesario para desbloquear el audio en muchos navegadores
+    startMetronome();
     audioRef.current.play();
     setIsPlaying(true);
     rafRef.current = requestAnimationFrame(updateCursor);
   };
-
-  const pause = () => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    setIsPlaying(false);
-    cancelAnimationFrame(rafRef.current);
-  };
-
+  
   const stop = () => {
     if (!audioRef.current) return;
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
     setIsPlaying(false);
     setCurrentIndex(0);
+    stopMetronome();
     cancelAnimationFrame(rafRef.current);
   };
-
-  console.log("Project:", project);
+  
+  const pause = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    setIsPlaying(false);
+    stopMetronome();
+    cancelAnimationFrame(rafRef.current);
+  };
 
   useEffect(() => {
     stop(); // Resetea playback y cursor si cambia la canción
@@ -94,9 +189,7 @@ export default function DAW() {
 
   const firstBar = project.bars[0] ?? 0;
   const audioMs = audioRef.current ? audioRef.current.currentTime * 1000 : 0;
-  const normalizedAudioMs = audioMs; // NO restes firstBar aquí
-
-console.log("audioMs:", audioMs.toFixed(2), "firstBar:", firstBar.toFixed(2), "normalizedAudioMs:", normalizedAudioMs.toFixed(2));
+  const normalizedAudioMs = audioMs - firstBar;
 
 return (
   <div className="p-6 max-w-6xl mx-auto">
@@ -148,46 +241,83 @@ return (
       >
         ⏹️ Stop
       </button>
+
+      <button
+  onClick={() => setLoopActive(!loopActive)}
+  disabled={loopStart === null || loopEnd === null}
+  className={`px-4 py-2 rounded text-white ${loopActive ? "bg-purple-700" : "bg-purple-500"} hover:bg-purple-600`}
+>
+  {loopActive ? "Desactivar Loop" : "Activar Loop"}
+</button>
+
+
+      <button
+  onClick={() => {
+    setLoopStart(null);
+    setLoopEnd(null);
+    setLoopActive(false);
+  }}
+  className="px-4 py-2 rounded bg-gray-400 hover:bg-gray-500 text-white"
+>
+  Limpiar Loop
+</button>
     </div>
 
     {/* Visualización barras subdivididas */}
     <div className="grid grid-cols-8 gap-0">
-      {project.bars.map((startTime, index) => {
-        const endTime = project.bars[index + 1] ?? startTime + 4000; // fallback para la última barra
+    {project.bars.map((startTime, index) => {
+  const endTime = project.bars[index + 1] ?? startTime + 4000;
+  const normalizedStartTime = startTime - firstBar;
+  const normalizedEndTime = endTime - firstBar;
 
-        const normalizedStartTime = startTime - firstBar;
-        const normalizedEndTime = endTime - firstBar;
+  const barDuration = normalizedEndTime - normalizedStartTime;
+  const subdivisionDuration = barDuration / subdivisionsCount;
 
-        const barDuration = normalizedEndTime - normalizedStartTime;
-        const subdivisionDuration = barDuration / subdivisionsCount;
+  return (
+    <div
+      key={index}
+      onClick={() => handleBarClick(index)}
+      className={`m-1 p-0 rounded-[5px] border border-gray-100 cursor-pointer
+        ${index === currentIndex ? "border-b-[7px] border-b-gray-500" : ""}
+        ${
+          loopStart !== null &&
+          loopEnd !== null &&
+          index >= loopStart &&
+          index <= loopEnd
+            ? "bg-yellow-300"
+            : ""
+        }
+      `}
+    >
+      <div className="flex h-24 overflow-hidden relative">
+        {Array.from({ length: subdivisionsCount }).map((_, subIndex) => {
+          const subStart = normalizedStartTime + subIndex * subdivisionDuration;
+          const subEnd = subStart + subdivisionDuration;
+  
+          const isActiveSubdivision =
+            index === currentIndex && subIndex === currentSubdivision;
+  
+          const isDownbeat = subIndex === 0;
+  
+          return (
+            <div
+              key={subIndex}
+              className={`flex-1 border-l border-gray-200 transition-colors ${
+                isActiveSubdivision
+                  ? "bg-sky-500/50" // subdivisión activa más marcada
+                  : isDownbeat
+                  ? "bg-gray-100"
+                  : "bg-transparent"
+              }`}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+  
+})}
 
-        return (
-          <div
-            key={index}
-            className="border border-gray-300"
-          >
-            <div className="flex h-24">
-              {Array.from({ length: subdivisionsCount }).map((_, subIndex) => {
-                const subStart = normalizedStartTime + subIndex * subdivisionDuration;
-                const subEnd = subStart + subdivisionDuration;
-                const isActive = normalizedAudioMs >= subStart && normalizedAudioMs < subEnd;
-
-                return (
-                  <div
-                    key={subIndex}
-                    className={`flex-1 border-l border-gray-200 transition-colors ${
-                      isActive ? "bg-blue-100" : "bg-transparent"
-                    }`}
-                  >
-                    {/* Puedes descomentar para mostrar números de subdivisión */}
-                    {/* <span className="text-xs text-center block">{subIndex + 1}</span> */}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
     </div>
   </div>
 );
