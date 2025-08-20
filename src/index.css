@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  /* Estilo base de todos los botones */
+  .btn {
+    @apply inline-flex items-center gap-x-2 text-sm font-semibold rounded-lg focus:outline-none disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  /* Variante primaria (azul Preline) */
+  .btn-primary {
+    @apply py-3 px-4 border border-transparent bg-blue-600 text-white shadow-sm hover:bg-blue-700 focus:bg-blue-700;
+  }
+
+  /* Variante secundaria (borde gris, fondo claro) */
+  .btn-secondary {
+    @apply py-3 px-4 border border-gray-200 bg-white/10 text-white shadow-sm hover:bg-white/20 focus:bg-white/20;
+  }
+
+  /* Variante danger (rojo) opcional */
+  .btn-danger {
+    @apply py-3 px-4 border border-transparent bg-red-600 text-white shadow-sm hover:bg-red-700 focus:bg-red-700;
+  }
+}
+
